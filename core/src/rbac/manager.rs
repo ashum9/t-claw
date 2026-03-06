@@ -16,6 +16,7 @@ pub enum PermissionResult {
 }
 
 /// RBAC Manager for permission checking
+#[derive(Debug, Clone)]
 pub struct RbacManager {
     config: RbacConfig,
     path_matcher: PathMatcher,
@@ -272,10 +273,25 @@ impl RbacManager {
                 ));
             }
 
+            // Prevent command injection via shell metacharacters.
+            // Includes Unix operators, Windows-specific chars (%,!,^), and
+            // newline/CR to block CRLF injection through env-var expansion.
+            // NOTE: Check once here to avoid log spam in the loop below.
+            const SHELL_METACHARS: &[char] = &[
+                ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n',
+                '\r', // newline injection
+                '%', '!', '^', // Windows: %VAR%, delayed expansion, escape char
+            ];
+            if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
+                warn!("Command rejected: contained disallowed shell metacharacters");
+                return PermissionResult::Denied(
+                    "Command contained disallowed shell metacharacters".to_string(),
+                );
+            }
+
             // Check if command matches any allowed pattern
-            let command_lower = command.to_lowercase();
             for pattern in &op_perm.allowed {
-                if self.matches_command_pattern(&command_lower, pattern) {
+                if self.matches_command_pattern(command, pattern) {
                     return PermissionResult::Allowed;
                 }
             }
@@ -290,52 +306,46 @@ impl RbacManager {
         PermissionResult::Allowed
     }
 
+    /// Check if command matches a pattern (supports wildcards)
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
-        // ── 1. Metacharacter gate ─────────────────────────────────────────
-        // Reject anything that could be interpreted by a shell interpreter.
-        // NOTE: Do NOT log the command itself — it may contain secrets.
-        const SHELL_METACHARS: &[char] = &[
-            ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n',
-            '\r', // CRLF injection
-            '%', '!', '^', // Windows: %VAR%, delayed expansion, escape
-        ];
-        if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
-            warn!("Command rejected: contained disallowed shell metacharacters");
-            return false;
-        }
-
-        // ── 2. Token match with globbing ──────────────────────────────────
-        let cmd_tokens: Vec<&str> = command.split_whitespace().collect();
+        // ── 1. Token match with shell-words ───────────────────────────────
+        // Both pattern and command are tokenized via shell_words (POSIX quoting).
+        // This ensures the authorization check precisely mirrors execution argv parsing.
+        let command_lower = command.to_lowercase();
         let pattern_lower = pattern.to_lowercase();
-        let pat_tokens: Vec<&str> = pattern_lower.split_whitespace().collect();
 
-        if pat_tokens.is_empty() || cmd_tokens.is_empty() {
+        let cmd_tokens = match shell_words::split(&command_lower) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let pat_tokens = match shell_words::split(&pattern_lower) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+
+        if pat_tokens.is_empty() {
             return false;
         }
 
-        // Helper for recursive token matching
-        fn match_tokens(cmd: &[&str], pat: &[&str]) -> bool {
-            if pat.is_empty() {
-                return cmd.is_empty();
+        // ── 2. Linear matching with single wildcard support ───────────────
+        // We only allow a trailing '*' as a wildcard. This covers "ls *" or "cat *".
+        // This avoids recursive/exponential matching and simplifies validation.
+        for (i, pat_token) in pat_tokens.iter().enumerate() {
+            if pat_token == "*" {
+                // Wildcard matches the rest of the command (if any)
+                // We only support trailing wildcards for security and simplicity.
+                return i == pat_tokens.len() - 1;
             }
-            if pat[0] == "*" {
-                // Try matching the rest of the pattern against different suffixes of the command
-                for skip in 0..=cmd.len() {
-                    if match_tokens(&cmd[skip..], &pat[1..]) {
-                        return true;
-                    }
-                }
-                false
-            } else {
-                if cmd.is_empty() || cmd[0] != pat[0] {
-                    false
-                } else {
-                    match_tokens(&cmd[1..], &pat[1..])
-                }
+
+            // Exact token match (case-insensitive due to earlier normalization)
+            if i >= cmd_tokens.len() || cmd_tokens[i] != *pat_token {
+                return false;
             }
         }
 
-        match_tokens(&cmd_tokens, &pat_tokens)
+        // If we reached the end of the pattern without a wildcard,
+        // the command must have exactly the same number of tokens.
+        cmd_tokens.len() == pat_tokens.len()
     }
 
     /// Get role from Discord user ID and roles
