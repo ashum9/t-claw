@@ -284,17 +284,22 @@ async def handle_websocket(app_id, app_secret, encrypt_key, verify_token):
     feishu_handler.create_client()
 
     # ── Flush messages queued while Rust was disconnected ────────────────────
-    with queue_lock:
-        pending = list(inbound_queue)
-        inbound_queue.clear()
-    if pending:
-        logger.info(f"Flushing {len(pending)} queued message(s) to Rust")
-        for queued_msg in pending:
-            try:
-                await websocket_ref.send(json.dumps(queued_msg))
-            except Exception as flush_err:
-                logger.error(f"Failed to flush queued message: {flush_err}")
-                break  # abort flush on error; remaining messages are lost
+    flushed_count = 0
+    while True:
+        with queue_lock:
+            if not inbound_queue:
+                break
+            queued_msg = inbound_queue.popleft()
+        try:
+            await websocket_ref.send(json.dumps(queued_msg))
+            flushed_count += 1
+        except Exception as flush_err:
+            logger.error(f"Failed to flush queued message: {flush_err}")
+            with queue_lock:
+                inbound_queue.appendleft(queued_msg)  # Re-queue on failure
+            break
+    if flushed_count:
+        logger.info(f"Flushed {flushed_count} queued message(s) to Rust")
 
     # Keep connection alive and handle any commands from Rust
     try:
@@ -365,6 +370,9 @@ async def event_subscription_task(app_id, app_secret, encrypt_key, verify_token)
     internally, so we run it in a thread-pool executor.  If it ever returns
     or raises, we restart it after an exponential back-off.
     """
+    global main_loop
+    main_loop = asyncio.get_running_loop()  # Set early to prevent race condition
+    
     logger.info("Starting Feishu event subscription (long-connection mode)...")
 
     # Build the lark-oapi event dispatcher bound to our handler
@@ -384,7 +392,7 @@ async def event_subscription_task(app_id, app_secret, encrypt_key, verify_token)
         log_level=lark.LogLevel.INFO,
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     backoff = 1
     max_backoff = 60
 
@@ -442,7 +450,7 @@ def run_feishu_client(
             # handle_message_event() can always find it, even if the first
             # Feishu event arrived unusually early.
             global main_loop
-            main_loop = asyncio.get_event_loop()
+            main_loop = asyncio.get_running_loop()
             await asyncio.gather(
                 ws_server_task(),
                 event_subscription_task(app_id, app_secret, encrypt_key, verify_token),
