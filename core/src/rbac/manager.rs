@@ -361,10 +361,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first (highest priority)
-        if let Some(role_str) = mapping.user_overrides.get(user_id)
-            && let Some(role) = Role::from_str(role_str)
-        {
-            return role;
+        if let Some(role_str) = mapping.user_overrides.get(user_id) {
+            if let Some(role) = Role::from_str(role_str) {
+                return role;
+            }
         }
 
         // Map Discord roles to mofa roles (highest role wins)
@@ -401,10 +401,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first
-        if let Some(role_str) = mapping.user_overrides.get(user_id)
-            && let Some(role) = Role::from_str(role_str)
-        {
-            return role;
+        if let Some(role_str) = mapping.user_overrides.get(user_id) {
+            if let Some(role) = Role::from_str(role_str) {
+                return role;
+            }
         }
 
         // Map tags to roles (highest role wins)
