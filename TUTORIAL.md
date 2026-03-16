@@ -416,6 +416,24 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 ---
 
 ## The Workspace
+---
+
+## Security & Access Control (RBAC)
+
+mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
+
+### Roles
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via `rbac.role_mappings` and `rbac.user_overrides` in `config.json`.
+- **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
+- **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
+- **Admin**: Extended access for managing the system.
+- **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
+
+### 📋 Audit Logging
+mofaclaw provides an `AuditLogger` component that you can use to record RBAC permission checks. When you wire it into your RBAC or tool execution pipeline, denied accesses can be logged with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
+
+---
+
 
 When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
 
