@@ -416,24 +416,6 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 ---
 
 ## The Workspace
----
-
-## Security & Access Control (RBAC)
-
-mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
-
-### Roles
-The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via `rbac.role_mappings` and `rbac.user_overrides` in `config.json`.
-- **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
-- **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
-- **Admin**: Extended access for managing the system.
-- **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
-
-### 📋 Audit Logging
-mofaclaw provides an `AuditLogger` component that you can use to record RBAC permission checks. When you wire it into your RBAC or tool execution pipeline, denied accesses can be logged with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
-
----
-
 
 When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
 
@@ -466,6 +448,22 @@ When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's
 - **`TOOLS.md`** — Documents all tools from the agent's perspective (what each tool does, its parameters)
 - **`HEARTBEAT.md`** — Tasks the agent checks every 30 minutes (add checklist items here)
 - **`memory/MEMORY.md`** — Persistent facts the agent remembers across sessions
+
+---
+
+## Security & Access Control (RBAC)
+
+mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
+
+### Roles
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via their entries under `rbac.role_mappings` in `config.json` (for example, `rbac.role_mappings.discord.user_overrides` for per-user overrides on Discord). The roles below describe **typical recommended configurations**; the actual behavior depends on your `rbac.permissions.*` settings (for example, shell access via `rbac.permissions.tools.shell.safe_commands.min_role`).
+- **Guest**: Highly restricted. Typically configured with read-only access to specific folders and no shell command permissions, unless `rbac.permissions.tools.shell.safe_commands.min_role` is set to allow it.
+- **Member**: Standard access. Often configured as the default role. Can usually read/write to the workspace and run safe commands, depending on your RBAC permission settings.
+- **Admin**: Extended access for managing the system.
+- **SuperAdmin**: Highest-privilege role. Bypasses shell command sandboxing, but is still subject to filesystem path whitelist/blacklist rules unless explicitly allowed there.
+
+### 📋 Audit Logging
+mofaclaw provides an `AuditLogger` component that you can use to record RBAC permission checks. When you wire it into your RBAC or tool execution pipeline, denied accesses can be logged with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
 
 ---
 

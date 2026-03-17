@@ -416,25 +416,6 @@ pub enum MofaclawError {
 ---
 
 ## 工作区
----
-
-## 安全与访问控制 (RBAC)
-
-mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
-
-### 角色 (Roles)
-代理的权限由 `config.json` 中 `rbac.default_role` 指定的默认角色，以及各渠道通过 `rbac.role_mappings` / `user_overrides` 解析得到的实际角色共同决定。
-- **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
-- **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
-- **Admin (管理员)**: 拥有管理系统的扩展权限。
-- **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
-
-### 📋 审计日志 (Audit Logging)
-为了确保透明度，mofaclaw 提供可选的 RBAC 审计日志能力。你可以在 RBAC 权限检查或工具权限检查流程中显式接入 `AuditLogger`（例如调用 `AuditLogger::log`），以记录每一次检查及其结果。例如，当 AI 被拒绝访问文件或执行命令时，可以记录类似：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`。
-
----
-
-
 运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
 
 ```
@@ -466,6 +447,22 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
 - **`TOOLS.md`** — 从代理角度记录所有工具（每个工具的功能、参数）
 - **`HEARTBEAT.md`** — 代理每 30 分钟检查的任务（在此添加任务清单）
 - **`memory/MEMORY.md`** — 代理跨会话记住的持久化事实
+
+---
+
+## 安全与访问控制 (RBAC)
+
+mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
+
+### 角色 (Roles)
+代理的最终权限**完全由配置决定**：包括 `config.json` 中 `rbac.default_role` 指定的默认角色（当前实现的内置默认值为 `"guest"`），以及各渠道通过 `rbac.role_mappings.<channel>.user_overrides`（例如 `rbac.role_mappings.discord.user_overrides`）解析得到的实际角色。
+- **Guest (访客)**: 权限严格受限。通常仅对特定文件夹拥有只读访问权限。是否可以执行 Shell 命令等高危操作，取决于 `rbac.permissions.tools.shell` 下各操作的 `min_role` / `path_whitelist` 等配置，而不是角色“天生”禁止。
+- **Member (成员)**: 标准权限。可以读写工作区，并能运行配置中允许、已列入白名单的命令。常用于日常开发或受信任的团队成员，如需将默认角色设为 Member，应显式在 `rbac.default_role` 中配置。
+- **Admin (管理员)**: 拥有管理系统的扩展权限。
+- **SuperAdmin (超级管理员)**: 最高权限角色。可访问所有已在 RBAC 中授权的工具与路径；但如果启用了文件系统沙箱，仍需在相应的 `path_whitelist` / `path_blacklist` 中显式为 `superadmin` 配置规则，否则访问也会被拒绝。
+
+### 📋 审计日志 (Audit Logging)
+为了确保透明度，mofaclaw 提供可选的 RBAC 审计日志能力。你可以在 RBAC 权限检查或工具权限检查流程中显式接入 `AuditLogger`（例如调用 `AuditLogger::log`），以记录每一次检查及其结果。例如，当 AI 被拒绝访问文件或执行命令时，可以记录类似：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`。
 
 ---
 
