@@ -9,6 +9,9 @@ DAYS=30
 REPO=""
 OUTPUT_FORMAT="markdown"
 TMPFILE=""
+REPO_REPORT_CACHE_ENABLED="1"
+REPO_REPORT_CACHE_TTL_SECONDS="${REPO_REPORT_CACHE_TTL_SECONDS:-600}"
+REPO_REPORT_CACHE_DIR="${REPO_REPORT_CACHE_DIR:-$HOME/.mofaclaw/cache/repo-report}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -16,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     --days)  DAYS="$2";  shift 2 ;;
     --repo)  REPO="$2";  shift 2 ;;
     --json)  OUTPUT_FORMAT="json"; shift 1 ;;
+    --no-cache) REPO_REPORT_CACHE_ENABLED="0"; shift 1 ;;
     *)       echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -68,6 +72,14 @@ echo "# 📊 Repository Health Report: $REPO"
 echo ""
 echo "**Period:** Last ${DAYS} days — ${SINCE_DATE} to ${TODAY}"
 echo "**Generated:** ${GENERATED_AT}"
+
+# ── Cache config (optional) ────────────────────────────────────────────────
+TTL_MIN=$(( (REPO_REPORT_CACHE_TTL_SECONDS + 59) / 60 ))
+cache_repo="${REPO//\//_}"
+mkdir -p "$REPO_REPORT_CACHE_DIR"
+PR_CACHE_FILE="$REPO_REPORT_CACHE_DIR/pr-${cache_repo}-${DAYS}-${SINCE_DATE}.json"
+ISSUE_CACHE_FILE="$REPO_REPORT_CACHE_DIR/issue-${cache_repo}-${DAYS}-${SINCE_DATE}.json"
+RUN_CACHE_FILE="$REPO_REPORT_CACHE_DIR/run-${cache_repo}-${DAYS}-${SINCE_DATE}.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "1. Commit Activity"
@@ -165,8 +177,15 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 section "2. Pull Request Metrics"
 
-PR_JSON=$(gh pr list --repo "$REPO" --state all --limit 200 \
-  --json number,state,createdAt,mergedAt,additions,deletions 2>/dev/null || echo "[]")
+if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]] && [[ -f "$PR_CACHE_FILE" ]] && [[ "$TTL_MIN" -gt 0 ]] && find "$PR_CACHE_FILE" -mmin -"${TTL_MIN}" | grep -q .; then
+  PR_JSON="$(cat "$PR_CACHE_FILE")"
+else
+  PR_JSON=$(gh pr list --repo "$REPO" --state all --limit 1000 \
+    --json number,state,createdAt,mergedAt,additions,deletions 2>/dev/null || echo "[]")
+  if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]]; then
+    echo "$PR_JSON" > "$PR_CACHE_FILE"
+  fi
+fi
 
 PR_STATS=$(echo "$PR_JSON" | jq --arg since "$SINCE_ISO" '
   [.[] | select(.createdAt >= $since)] as $prs |
@@ -209,8 +228,15 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 section "3. Issue Statistics"
 
-ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit 200 \
-  --json number,state,createdAt,closedAt,labels 2>/dev/null || echo "[]")
+if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]] && [[ -f "$ISSUE_CACHE_FILE" ]] && [[ "$TTL_MIN" -gt 0 ]] && find "$ISSUE_CACHE_FILE" -mmin -"${TTL_MIN}" | grep -q .; then
+  ISSUE_JSON="$(cat "$ISSUE_CACHE_FILE")"
+else
+  ISSUE_JSON=$(gh issue list --repo "$REPO" --state all --limit 1000 \
+    --json number,state,createdAt,closedAt,labels 2>/dev/null || echo "[]")
+  if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]]; then
+    echo "$ISSUE_JSON" > "$ISSUE_CACHE_FILE"
+  fi
+fi
 
 ISSUE_STATS=$(echo "$ISSUE_JSON" | jq --arg since "$SINCE_ISO" '
   [.[] | select(.createdAt >= $since)] as $issues |
@@ -253,8 +279,15 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 section "4. CI/CD Health"
 
-RUN_JSON=$(gh run list --repo "$REPO" --limit 100 \
-  --json status,conclusion,createdAt,updatedAt,name,headBranch,databaseId 2>/dev/null || echo "[]")
+if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]] && [[ -f "$RUN_CACHE_FILE" ]] && [[ "$TTL_MIN" -gt 0 ]] && find "$RUN_CACHE_FILE" -mmin -"${TTL_MIN}" | grep -q .; then
+  RUN_JSON="$(cat "$RUN_CACHE_FILE")"
+else
+  RUN_JSON=$(gh run list --repo "$REPO" --limit 1000 \
+    --json status,conclusion,createdAt,updatedAt,name,headBranch,databaseId 2>/dev/null || echo "[]")
+  if [[ "$REPO_REPORT_CACHE_ENABLED" == "1" ]]; then
+    echo "$RUN_JSON" > "$RUN_CACHE_FILE"
+  fi
+fi
 
 CI_STATS=$(echo "$RUN_JSON" | jq --arg since "$SINCE_ISO" '
   [.[] | select(.createdAt >= $since and .status == "completed")] as $runs |
