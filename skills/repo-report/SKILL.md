@@ -20,6 +20,15 @@ Use this skill when the user asks for a data-driven repository health overview, 
 - "code change statistics"
 
 ---
+## Example User Requests
+
+- "repo report for mofa-org/mofaclaw"
+- "repository stats for mofa-org/mofaclaw last 30 days"
+- "project health for mofa-org/mofaclaw last 90 days (include commit frequency + CI health)"
+- "ci health for owner/repo last 7 days"
+- "issue stats for owner/repo last 30 days (export as json)"
+
+---
 ## Example Commands to Document
 
 # Generate full report for last 30 days
