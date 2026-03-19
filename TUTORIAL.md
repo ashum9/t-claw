@@ -464,6 +464,36 @@ The agent's permissions are determined by your RBAC configuration: the global de
 
 ### 📋 Audit Logging
 mofaclaw provides an `AuditLogger` component that you can use to record RBAC permission checks. When you wire it into your RBAC or tool execution pipeline, denied accesses can be logged with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
+### 🛡️ Filesystem Sandbox (Path Whitelisting)
+When RBAC filesystem permissions are configured, mofaclaw can restrict which paths the AI may read or write.
+In that case, for all roles (including `superadmin`), access is allowed only for paths matching the role's configured `path_whitelist`; if no such permissions are defined, filesystem access is not restricted by RBAC.
+
+Example configuration in `config.json`:
+```json
+"rbac": {
+  "enabled": true,
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*Variables like `${workspace}` and `${home}` are automatically resolved.*
 
 ---
 

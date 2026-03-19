@@ -463,6 +463,35 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
 
 ### 📋 审计日志 (Audit Logging)
 为了确保透明度，mofaclaw 提供可选的 RBAC 审计日志能力。你可以在 RBAC 权限检查或工具权限检查流程中显式接入 `AuditLogger`（例如调用 `AuditLogger::log`），以记录每一次检查及其结果。例如，当 AI 被拒绝访问文件或执行命令时，可以记录类似：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`。
+### 🛡️ 文件系统沙箱 (路径白名单)
+当配置文件系统权限时，mofaclaw 会限制 AI 可以读写哪些路径。在这种情况下，所有角色（包括 SuperAdmin）都只允许访问与其角色匹配的 `path_whitelist`（路径白名单）中的路径；如果未配置相关权限，则文件系统访问不受 RBAC 限制。若希望 SuperAdmin 在文件系统上拥有几乎无限制的访问能力，应在相应权限项下为 `superadmin` 配置足够宽泛的路径模式（例如 `"${workspace}/**"`、`"${home}/**"` 等），而不是假定其会自动绕过沙箱。
+
+`config.json` 中的配置示例：
+```json
+"rbac": {
+  "enabled": true,
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
 
 ---
 
