@@ -4,6 +4,7 @@
 //! features like skills loading and vision model support.
 
 use crate::Config;
+use crate::config::SubagentProfileConfig;
 use crate::error::{AgentError, Result};
 use crate::types::{Message, MessageContent};
 use mofa_sdk::agent::{AgentIdentity, PromptContextBuilder};
@@ -27,6 +28,10 @@ pub struct ContextBuilder {
     skills: Arc<SkillsManager>,
     /// Workspace path (cached)
     workspace: PathBuf,
+    /// Optional default requested skill configured for this runtime
+    default_skill: Option<String>,
+    /// Optional configured subagent profiles for hub orchestration context
+    subagent_profiles: Vec<SubagentProfileConfig>,
 }
 
 impl ContextBuilder {
@@ -37,6 +42,14 @@ impl ContextBuilder {
     /// Create a new context builder
     pub fn new(config: &Config) -> Self {
         let workspace = config.workspace_path();
+        let default_skill = normalize_skill_identifier(&config.agents.default_skill);
+        let subagent_profiles = config
+            .agents
+            .subagents
+            .iter()
+            .filter(|profile| !profile.id.trim().is_empty() || !profile.skill.trim().is_empty())
+            .cloned()
+            .collect();
 
         // Create SkillsManager with workspace + builtin skills
         let workspace_skills = workspace.join("skills");
@@ -114,12 +127,31 @@ impl ContextBuilder {
         Self {
             skills: Arc::new(skills),
             workspace,
+            default_skill,
+            subagent_profiles,
         }
     }
 
     /// Build the system prompt from bootstrap files, memory, and skills
     pub async fn build_system_prompt(&self, skill_names: Option<&[String]>) -> Result<String> {
         let mut parts = Vec::new();
+        let mut requested_skill_names = Vec::new();
+
+        if let Some(default_skill) = &self.default_skill {
+            requested_skill_names.push(default_skill.clone());
+        }
+
+        if let Some(names) = skill_names {
+            for name in names {
+                if let Some(normalized) = normalize_skill_identifier(name)
+                    && !requested_skill_names
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(&normalized))
+                {
+                    requested_skill_names.push(normalized);
+                }
+            }
+        }
 
         // Build base prompt using mofa's PromptContextBuilder
         // Memory context (long-term + today's notes) is integrated automatically
@@ -158,13 +190,40 @@ impl ContextBuilder {
         }
 
         // Requested skills
-        if let Some(names) = skill_names {
-            if !names.is_empty() {
-                let skills_content = self.skills.load_skills_for_context(names).await;
-                if !skills_content.is_empty() {
-                    parts.push(format!("# Requested Skills\n\n{}", skills_content));
-                }
+        if !requested_skill_names.is_empty() {
+            let skills_content = self
+                .skills
+                .load_skills_for_context(&requested_skill_names)
+                .await;
+            if !skills_content.is_empty() {
+                parts.push(format!("# Requested Skills\n\n{}", skills_content));
             }
+        }
+
+        if !self.subagent_profiles.is_empty() {
+            let profiles = self
+                .subagent_profiles
+                .iter()
+                .map(|profile| {
+                    let id = if profile.id.trim().is_empty() {
+                        "unnamed-subagent"
+                    } else {
+                        profile.id.trim()
+                    };
+                    let skill = if profile.skill.trim().is_empty() {
+                        "(skill not configured)"
+                    } else {
+                        profile.skill.trim()
+                    };
+                    format!("- {} => {}", id, skill)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            parts.push(format!(
+                "# Configured Subagents\n\nThe following subagent profiles are configured for hub mode:\n{}",
+                profiles
+            ));
         }
 
         // Skills summary
@@ -332,10 +391,35 @@ Read the skill's SKILL.md file using the `read_file` tool to learn how to use it
     }
 }
 
+fn normalize_skill_identifier(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = Path::new(trimmed);
+    if let Some(stem) = path.file_stem().and_then(|name| name.to_str()) {
+        if stem.eq_ignore_ascii_case("skill") {
+            if let Some(parent_name) = path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                && !parent_name.trim().is_empty()
+            {
+                return Some(parent_name.to_string());
+            }
+        } else if !stem.trim().is_empty() {
+            return Some(stem.to_string());
+        }
+    }
+
+    Some(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::default_config;
+    use crate::config::{SubagentProfileConfig, default_config};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -372,5 +456,49 @@ mod tests {
         assert!(prompt.contains("# Requested Skills"));
         assert!(prompt.contains("# PR Review Skill"));
         assert!(prompt.contains("PR Template Compliance"));
+    }
+
+    #[tokio::test]
+    async fn test_default_skill_path_is_loaded() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = default_config();
+        config.agents.defaults.workspace = temp.path().display().to_string();
+        config.agents.default_skill = "skills/hub.md".to_string();
+
+        let context = ContextBuilder::new(&config);
+        let prompt = context
+            .build_system_prompt(None)
+            .await
+            .expect("system prompt");
+
+        assert!(prompt.contains("# Requested Skills"));
+        assert!(prompt.contains("# Hub Skill"));
+    }
+
+    #[tokio::test]
+    async fn test_subagent_profiles_are_exposed_in_prompt() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = default_config();
+        config.agents.defaults.workspace = temp.path().display().to_string();
+        config.agents.subagents = vec![
+            SubagentProfileConfig {
+                id: "mofa-specialist".to_string(),
+                skill: "skills/agent_mofa.md".to_string(),
+            },
+            SubagentProfileConfig {
+                id: "security-specialist".to_string(),
+                skill: "skills/agent_tclaw.md".to_string(),
+            },
+        ];
+
+        let context = ContextBuilder::new(&config);
+        let prompt = context
+            .build_system_prompt(None)
+            .await
+            .expect("system prompt");
+
+        assert!(prompt.contains("# Configured Subagents"));
+        assert!(prompt.contains("mofa-specialist => skills/agent_mofa.md"));
+        assert!(prompt.contains("security-specialist => skills/agent_tclaw.md"));
     }
 }

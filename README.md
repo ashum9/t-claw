@@ -1,3 +1,12 @@
+# T-Claw 🔐
+
+T-Claw is MoFAClaw with a TSP (Trust Spanning Protocol) trust layer.
+Every agent message is cryptographically signed and verified.
+A spoofed message is rejected before it reaches the LLM.
+
+Built on: MoFA Rust Kernel + OpenWallet TSP SDK
+LFDT Mentorship: github.com/LF-Decentralized-Trust-Mentorships/mentorship-program/issues/76
+
 <div align="center">
   <img src="./mofa-logo.png" alt="mofaclaw" width="200" height="200">
   <h1>mofaclaw: Ultra-Lightweight Personal AI Assistant</h1>
@@ -26,6 +35,26 @@
 ⚡️ **Lightning Fast**: Compiled performance with instant startup, minimal memory footprint, and efficient execution.
 
 💎 **Easy-to-Use**: Simple installation and setup — you're ready to go in minutes.
+
+## 🔐 T-Claw Hub Skills
+
+- `skills/hub/SKILL.md` provides the hub routing skill (spawns subagents and synthesizes results).
+- `skills/agent_mofa.md` and `skills/agent_tclaw.md` are the prompt files for the two hub roles.
+- To use them in a local workspace, copy these files into `~/.mofaclaw/workspace/skills/`.
+
+## 🤖 T-Claw Bot Quick Launch
+
+```bash
+cd mofaclaw
+cp .env.example .env
+# edit .env with your TELEGRAM_TOKEN and VID paths
+cargo run --bin mofaclaw
+```
+
+Notes:
+- Running `mofaclaw` with no subcommand now defaults to gateway mode.
+- `TELEGRAM_TOKEN` in `.env` is auto-loaded and enables Telegram by default.
+- `MOFACLAW_AGENTS_DEFAULT_SKILL=skills/hub.md` activates hub mode by default.
 
 ## 🏗️ Architecture
 

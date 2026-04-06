@@ -11,6 +11,7 @@ This directory contains the builtin skills for mofaclaw. These skills are automa
 - **tmux** - Remote-control tmux sessions for interactive CLIs
 - **skill-creator** - Meta-skill for creating new skills
 - **repo-report** - Generate comprehensive repository analytics reports for managers
+- **hub** - Route a request to multiple subagents and synthesize results
 
 ## Skill Structure
 

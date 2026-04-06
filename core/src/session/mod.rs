@@ -178,7 +178,8 @@ impl SessionManager {
 
     /// Get the file path for a session
     fn get_session_path(&self, key: &str) -> PathBuf {
-        self.sessions_dir.join(format!("{}.jsonl", storage_key(key)))
+        self.sessions_dir
+            .join(format!("{}.jsonl", storage_key(key)))
     }
 
     /// Get the inner mofa SessionManager (for advanced usage)

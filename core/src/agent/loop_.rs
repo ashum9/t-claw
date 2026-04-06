@@ -7,6 +7,7 @@ use crate::Config;
 use crate::agent::ContextBuilder;
 use crate::agent::SubagentManager;
 use crate::bus::MessageBus;
+use crate::config::TrustConfig;
 use crate::error::Result;
 use crate::messages::{InboundMessage, OutboundMessage};
 use crate::session::{SessionExt, SessionManager};
@@ -14,9 +15,10 @@ use crate::tools::filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFil
 use crate::tools::shell::ExecTool;
 use crate::tools::web::{WebFetchTool, WebSearchTool};
 use crate::tools::{MessageTool, SpawnTool, ToolRegistry, ToolRegistryExecutor};
+use crate::trust::{self, InboundTrustDecision};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 // Import mofa framework components
 use mofa_sdk::llm::{
@@ -57,6 +59,8 @@ pub struct AgentLoop {
     sessions: Arc<SessionManager>,
     /// Context builder
     context: ContextBuilder,
+    /// Trust configuration for TSP verification/signing
+    trust_config: TrustConfig,
     /// Running state
     running: Arc<RwLock<bool>>,
     /// Task orchestrator for subagent spawning
@@ -106,6 +110,7 @@ impl AgentLoop {
             bus,
             sessions,
             context,
+            trust_config: config.trust.clone(),
             running: Arc::new(RwLock::new(false)),
             task_orchestrator,
             max_iterations,
@@ -143,6 +148,7 @@ impl AgentLoop {
             bus,
             sessions,
             context,
+            trust_config: config.trust.clone(),
             running: Arc::new(RwLock::new(false)),
             task_orchestrator,
             max_iterations,
@@ -249,6 +255,29 @@ impl AgentLoop {
             (msg.channel.clone(), msg.chat_id.clone())
         };
 
+        if self.trust_config.enabled {
+            match trust::verify_inbound(&msg, &self.trust_config).await {
+                InboundTrustDecision::Accepted => {
+                    info!("TEA: message verified from {}", msg.sender_id);
+                }
+                InboundTrustDecision::Skipped(reason) => {
+                    tracing::debug!(
+                        "TEA: verification skipped for {}: {}",
+                        msg.sender_id,
+                        reason
+                    );
+                }
+                InboundTrustDecision::Rejected(reason) => {
+                    tracing::warn!(
+                        "TEA: rejected inbound message from {}: {}",
+                        msg.sender_id,
+                        reason
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
         let session_key = format!("{}:{}", response_channel, response_chat_id);
         let session = self.sessions.get_or_create(&session_key).await;
 
@@ -296,8 +325,20 @@ impl AgentLoop {
         }
         info!("Session {} saved successfully", session_key);
 
-        Ok(final_content
-            .map(|content| OutboundMessage::new(&response_channel, &response_chat_id, content)))
+        let outbound = if let Some(content) = final_content {
+            let mut outbound = OutboundMessage::new(&response_channel, &response_chat_id, content);
+
+            if let Some(packet) = trust::sign_outbound(&outbound.content, &self.trust_config).await
+            {
+                outbound.trust_packet = Some(packet);
+            }
+
+            Some(outbound)
+        } else {
+            None
+        };
+
+        Ok(outbound)
     }
 
     /// Run the main agent loop using mofa framework's built-in AgentLoop
@@ -405,6 +446,7 @@ impl AgentLoop {
         let prompt_clone = prompt.to_string();
         let origin_channel_clone = origin_channel.to_string();
         let origin_chat_id_clone = origin_chat_id.to_string();
+        let trust_config_clone = self.trust_config.clone();
 
         tokio::spawn(async move {
             // Wait for this task's result
@@ -418,6 +460,7 @@ impl AgentLoop {
                         &origin_channel_clone,
                         &origin_chat_id_clone,
                         result.success,
+                        &trust_config_clone,
                     )
                     .await;
                     break;
@@ -440,6 +483,7 @@ impl AgentLoop {
         origin_channel: &str,
         origin_chat_id: &str,
         success: bool,
+        trust_config: &TrustConfig,
     ) {
         let status_text = if success {
             "completed successfully"
@@ -459,12 +503,18 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             label, status_text, task, result
         );
 
-        let msg = InboundMessage::system(
+        let mut msg = InboundMessage::system(
             &format!("subagent_{}", uuid::Uuid::new_v4()),
             origin_channel,
             origin_chat_id,
             &announce_content,
         );
+
+        if let Some(packet) = trust::sign_outbound(&announce_content, trust_config).await {
+            msg.trust_packet = Some(packet);
+        } else if trust_config.enabled {
+            warn!("TEA: subagent announcement was not signed; strict system trust may reject it");
+        }
 
         if let Err(e) = bus.publish_inbound(msg).await {
             error!("Failed to announce subagent result: {}", e);

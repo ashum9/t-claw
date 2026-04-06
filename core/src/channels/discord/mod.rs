@@ -2125,16 +2125,19 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel::with_rbac(self.config.clone(), self.bus.clone(), self.rbac_manager.clone()).unwrap_or(
-                    DiscordChannel {
-                        config: self.config.clone(),
-                        bus: self.bus.clone(),
-                        running: Arc::new(RwLock::new(true)),
-                        http: Arc::new(RwLock::new(None)),
-                        permissions: PermissionManager::from_discord_config(&self.config),
-                        rbac_manager: self.rbac_manager.clone(),
-                    },
-                );
+                let channel = DiscordChannel::with_rbac(
+                    self.config.clone(),
+                    self.bus.clone(),
+                    self.rbac_manager.clone(),
+                )
+                .unwrap_or(DiscordChannel {
+                    config: self.config.clone(),
+                    bus: self.bus.clone(),
+                    running: Arc::new(RwLock::new(true)),
+                    http: Arc::new(RwLock::new(None)),
+                    permissions: PermissionManager::from_discord_config(&self.config),
+                    rbac_manager: self.rbac_manager.clone(),
+                });
 
                 if !channel.is_allowed(&user_id, &roles) {
                     debug!("message from unauthorized user: {}", user_id);

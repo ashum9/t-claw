@@ -38,7 +38,7 @@ const MOFA_LOGO: &str = r#"
 #[command(about = "Mofaclaw - Personal AI Assistant", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -174,29 +174,36 @@ enum CronCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load local .env when present to make local bot runs convenient.
+    let _ = dotenvy::dotenv();
+
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Onboard => {
+        Some(Commands::Onboard) => {
             command_onboard().await?;
         }
-        Commands::Gateway { port, verbose } => {
+        Some(Commands::Gateway { port, verbose }) => {
             command_gateway(port, verbose).await?;
         }
-        Commands::Agent { message, session } => {
+        Some(Commands::Agent { message, session }) => {
             command_agent(message, session).await?;
         }
-        Commands::Status => {
+        Some(Commands::Status) => {
             command_status().await?;
         }
-        Commands::Channels { channel_cmd } => {
+        Some(Commands::Channels { channel_cmd }) => {
             command_channels(channel_cmd).await?;
         }
-        Commands::Cron { cron_cmd } => {
+        Some(Commands::Cron { cron_cmd }) => {
             command_cron(cron_cmd).await?;
         }
-        Commands::Session { session_cmd } => {
+        Some(Commands::Session { session_cmd }) => {
             command_session(session_cmd).await?;
+        }
+        None => {
+            // Default behavior for quick local runs.
+            command_gateway(18790, false).await?;
         }
     }
 
@@ -350,17 +357,18 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     let channel_manager = ChannelManager::new(&config, bus.clone());
 
     // Initialize RBAC manager if configured (must be before channel registrations)
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+    let rbac_manager: Option<Arc<RbacManager>> =
+        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+            if rbac_config.enabled {
+                let workspace = config.workspace_path();
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {

@@ -590,6 +590,60 @@ Use `assets/citation-template.txt` as a template.
 - **Use references/ for detail** — Move large documentation into `references/` files and reference them from SKILL.md. The agent will load them only when needed.
 - **Don't duplicate knowledge** — The LLM is already smart. Only include domain-specific procedures, API details, or workflows the model can't infer on its own.
 
+### Example: T-Claw hub skill (multi-agent routing)
+
+This example shows a hub skill that fans out a request to two specialists and synthesizes the result.
+
+Create `skills/hub/SKILL.md`:
+
+```markdown
+---
+name: hub
+description: Route a request to Agent-MoFA and Agent-T-Claw subagents, then synthesize results.
+---
+
+# Hub Skill
+
+1) Read role prompts from:
+- `skills/agent_mofa.md`
+- `skills/agent_tclaw.md`
+
+2) Spawn two subagents with the `spawn` tool:
+- Prompt = role prompt + user request
+
+3) Merge the responses:
+- Include short MoFA + Security sections
+- Keep any explicit trust verdicts from Agent-T-Claw
+```
+
+Then add the role prompts:
+
+```markdown
+// skills/agent_mofa.md
+You are Agent-MoFA, a specialist in the MoFA Rust microkernel architecture.
+Your role: analyze codebases for routing efficiency, FilterPipeline issues,
+and InvocationTarget optimization opportunities.
+Always reference specific file names and function signatures.
+```
+
+```markdown
+// skills/agent_tclaw.md
+You are Agent-T-Claw, a security specialist in TSP/TEA trust frameworks.
+Your role: audit agent communication for cryptographic trust gaps,
+verify TSP packet integrity, and flag unsigned agent-to-agent messages.
+Always state whether a message is "TSP Verified ✅" or "Trust Gap ❌".
+```
+
+#### Quick verification (CLI)
+
+Once the files are in `~/.mofaclaw/workspace/skills/`, run:
+
+```bash
+cargo run --release -- agent -m "Use the hub skill. Ask Agent-MoFA and Agent-T-Claw to audit my gateway code for routing + trust gaps."
+```
+
+You should see a response that includes both **MoFA analysis** and **Security analysis** sections, plus a final synthesis.
+
 ### Reference skills
 
 Look at existing skills for inspiration:

@@ -24,6 +24,9 @@ pub struct InboundMessage {
     /// Channel-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Optional TSP trust packet used for message verification
+    #[serde(default)]
+    pub trust_packet: Option<String>,
 }
 
 impl InboundMessage {
@@ -42,6 +45,7 @@ impl InboundMessage {
             timestamp: Utc::now(),
             media: Vec::new(),
             metadata: HashMap::new(),
+            trust_packet: None,
         }
     }
 
@@ -99,6 +103,12 @@ impl InboundMessage {
         self.media = media;
         self
     }
+
+    /// Attach a trust packet to the inbound message
+    pub fn with_trust_packet(mut self, trust_packet: impl Into<String>) -> Self {
+        self.trust_packet = Some(trust_packet.into());
+        self
+    }
 }
 
 /// Message to send to a chat channel
@@ -119,6 +129,9 @@ pub struct OutboundMessage {
     /// Channel-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Optional TSP trust packet used for outbound authenticity proof
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_packet: Option<String>,
 }
 
 impl OutboundMessage {
@@ -135,6 +148,7 @@ impl OutboundMessage {
             reply_to: None,
             media: Vec::new(),
             metadata: HashMap::new(),
+            trust_packet: None,
         }
     }
 
@@ -147,6 +161,12 @@ impl OutboundMessage {
     /// Add media to the message
     pub fn with_media(mut self, media: Vec<String>) -> Self {
         self.media = media;
+        self
+    }
+
+    /// Attach a trust packet to the outbound message
+    pub fn with_trust_packet(mut self, trust_packet: impl Into<String>) -> Self {
+        self.trust_packet = Some(trust_packet.into());
         self
     }
 }
@@ -175,5 +195,6 @@ mod tests {
             .with_media(vec!["file.jpg".to_string()]);
         assert_eq!(msg.reply_to, Some("msg_123".to_string()));
         assert_eq!(msg.media.len(), 1);
+        assert!(msg.trust_packet.is_none());
     }
 }

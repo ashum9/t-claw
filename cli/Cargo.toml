@@ -28,6 +28,9 @@ dirs = "5.0"
 
 # Date/time
 chrono = { workspace = true }
+
+# environment
+dotenvy = { workspace = true }
 #  local path with latest framework updates
 #mofa-sdk = { path = "/Users/lijing/CodeProjects/mofa/crates/mofa-sdk" }
 mofa-sdk = "0.1.0"

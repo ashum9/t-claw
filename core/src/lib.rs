@@ -19,6 +19,7 @@ pub mod python_env;
 pub mod rbac;
 pub mod session;
 pub mod tools;
+pub mod trust;
 pub mod types;
 
 // Re-exports for convenience
@@ -27,9 +28,10 @@ pub use bus::{InboundMessage, MessageBus, OutboundMessage};
 pub use channels::{Channel, ChannelManager, DingTalkChannel, FeishuChannel, TelegramChannel};
 pub use config::{
     AgentDefaults, AgentsConfig, ChannelsConfig, Config, DingTalkConfig, FeishuConfig,
-    GatewayConfig, ProviderConfig, ProvidersConfig, TelegramConfig, ToolsConfig,
-    TranscriptionConfig, WebSearchConfig, WebToolsConfig, WhatsAppConfig, default_config,
-    get_config_dir, get_config_path, get_data_dir, get_workspace_path, load_config, save_config,
+    GatewayConfig, ProviderConfig, ProvidersConfig, SubagentProfileConfig, TelegramConfig,
+    ToolsConfig, TranscriptionConfig, TrustConfig, WebSearchConfig, WebToolsConfig, WhatsAppConfig,
+    default_config, get_config_dir, get_config_path, get_data_dir, get_workspace_path, load_config,
+    save_config,
 };
 pub use cron::{CronJob, CronPayload, CronSchedule, CronService};
 pub use error::*;
@@ -42,4 +44,5 @@ pub use session::{
     session_messages_to_messages,
 };
 pub use tools::ToolRegistry;
+pub use trust::InboundTrustDecision;
 pub use types::*;

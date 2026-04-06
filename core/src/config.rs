@@ -6,6 +6,7 @@
 use crate::error::{ConfigError, Result};
 use crate::rbac::config::RbacConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -240,12 +241,29 @@ fn default_max_tool_iterations() -> usize {
     20
 }
 
+/// Subagent profile configuration used by hub mode orchestration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SubagentProfileConfig {
+    /// Logical subagent identifier
+    #[serde(default)]
+    pub id: String,
+    /// Skill prompt path or skill identifier
+    #[serde(default)]
+    pub skill: String,
+}
+
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentsConfig {
     /// Default agent settings
     #[serde(default)]
     pub defaults: AgentDefaults,
+    /// Default skill to request in every system prompt (e.g. "hub" or "skills/hub.md")
+    #[serde(default)]
+    pub default_skill: String,
+    /// Named subagent profiles for hub mode dispatch
+    #[serde(default)]
+    pub subagents: Vec<SubagentProfileConfig>,
 }
 
 /// LLM provider configuration
@@ -347,6 +365,50 @@ pub struct ToolsConfig {
     pub transcription: TranscriptionConfig,
 }
 
+/// Trust layer configuration for TSP signing and verification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustConfig {
+    /// Enable trust verification/signing in the agent loop
+    #[serde(default)]
+    pub enabled: bool,
+    /// Allow inbound messages without a trust packet
+    #[serde(default = "default_allow_unsigned_inbound")]
+    pub allow_unsigned_inbound: bool,
+    /// Path to a private VID JSON file used for signing outbound messages
+    #[serde(default)]
+    pub signing_vid_path: String,
+    /// Path to a trusted sender VID JSON file used for inbound verification
+    #[serde(default)]
+    pub verify_vid_path: String,
+    /// Optional sender-specific VID paths for inbound verification
+    #[serde(default)]
+    pub sender_verify_vid_paths: HashMap<String, String>,
+    /// Channels that require trust packets when trust is enabled
+    #[serde(default = "default_strict_inbound_channels")]
+    pub strict_inbound_channels: Vec<String>,
+}
+
+impl Default for TrustConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_unsigned_inbound: default_allow_unsigned_inbound(),
+            signing_vid_path: String::new(),
+            verify_vid_path: String::new(),
+            sender_verify_vid_paths: HashMap::new(),
+            strict_inbound_channels: default_strict_inbound_channels(),
+        }
+    }
+}
+
+fn default_allow_unsigned_inbound() -> bool {
+    true
+}
+
+fn default_strict_inbound_channels() -> Vec<String> {
+    vec!["system".to_string()]
+}
+
 /// Transcription configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TranscriptionConfig {
@@ -373,6 +435,9 @@ pub struct Config {
     /// Tools configuration
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// Trust configuration
+    #[serde(default)]
+    pub trust: TrustConfig,
     /// RBAC configuration
     #[serde(default)]
     pub rbac: Option<RbacConfig>,
@@ -510,17 +575,17 @@ pub async fn load_config() -> Result<Config> {
     let contents = fs::read_to_string(&config_path).await?;
 
     // Parse as JSON first (our preferred format)
-    let config: Config = serde_json::from_str(&contents)
+    let mut config: Config = serde_json::from_str(&contents)
         .map_err(|e| ConfigError::Parse(format!("Failed to parse config JSON: {}", e)))?;
 
     // Apply environment overrides
-    apply_env_overrides(&config);
+    apply_env_overrides(&mut config);
 
     Ok(config)
 }
 
 /// Apply environment variable overrides to config
-fn apply_env_overrides(_config: &Config) {
+fn apply_env_overrides(config: &mut Config) {
     // Environment variables override config values
     // Format: MOFACLAW__SECTION__KEY=value
     // For example: MOFACLAW__PROVIDERS__OPENROUTER__API_KEY=sk-...
@@ -531,7 +596,113 @@ fn apply_env_overrides(_config: &Config) {
         tracing::debug!("OpenRouter API key from environment");
     }
 
+    if let Ok(value) = std::env::var("MOFACLAW_AGENTS_DEFAULT_SKILL")
+        && !value.trim().is_empty()
+    {
+        config.agents.default_skill = value.trim().to_string();
+    }
+
+    if let Ok(subagents_json) = std::env::var("MOFACLAW_AGENTS_SUBAGENTS_JSON")
+        && let Ok(subagents) = serde_json::from_str::<Vec<SubagentProfileConfig>>(&subagents_json)
+    {
+        config.agents.subagents = subagents;
+    }
+
+    let mut telegram_token_from_env = false;
+
+    if let Ok(token) = std::env::var("MOFACLAW_CHANNELS_TELEGRAM_TOKEN")
+        && !token.trim().is_empty()
+    {
+        config.channels.telegram.token = token;
+        telegram_token_from_env = true;
+    }
+
+    if let Ok(token) = std::env::var("TELEGRAM_TOKEN")
+        && !token.trim().is_empty()
+    {
+        config.channels.telegram.token = token;
+        telegram_token_from_env = true;
+    }
+
+    if let Ok(value) = std::env::var("MOFACLAW_CHANNELS_TELEGRAM_ENABLED")
+        && let Some(enabled) = parse_bool_env(&value)
+    {
+        config.channels.telegram.enabled = enabled;
+    }
+
+    if let Ok(value) = std::env::var("TELEGRAM_ENABLED")
+        && let Some(enabled) = parse_bool_env(&value)
+    {
+        config.channels.telegram.enabled = enabled;
+    }
+
+    if let Ok(allow_from_csv) = std::env::var("MOFACLAW_CHANNELS_TELEGRAM_ALLOW_FROM") {
+        config.channels.telegram.allow_from = parse_csv_list(&allow_from_csv);
+    }
+
+    if let Ok(allow_from_csv) = std::env::var("TELEGRAM_ALLOW_FROM") {
+        config.channels.telegram.allow_from = parse_csv_list(&allow_from_csv);
+    }
+
+    if telegram_token_from_env
+        && std::env::var("MOFACLAW_CHANNELS_TELEGRAM_ENABLED").is_err()
+        && std::env::var("TELEGRAM_ENABLED").is_err()
+    {
+        config.channels.telegram.enabled = true;
+    }
+
+    if let Ok(value) = std::env::var("MOFACLAW_TRUST_ENABLED")
+        && let Some(enabled) = parse_bool_env(&value)
+    {
+        config.trust.enabled = enabled;
+    }
+
+    if let Ok(value) = std::env::var("MOFACLAW_TRUST_ALLOW_UNSIGNED_INBOUND")
+        && let Some(allow_unsigned) = parse_bool_env(&value)
+    {
+        config.trust.allow_unsigned_inbound = allow_unsigned;
+    }
+
+    if let Ok(path) = std::env::var("MOFACLAW_TRUST_SIGNING_VID_PATH")
+        && !path.trim().is_empty()
+    {
+        config.trust.signing_vid_path = path;
+    }
+
+    if let Ok(path) = std::env::var("MOFACLAW_TRUST_VERIFY_VID_PATH")
+        && !path.trim().is_empty()
+    {
+        config.trust.verify_vid_path = path;
+    }
+
+    if let Ok(mapping_json) = std::env::var("MOFACLAW_TRUST_SENDER_VERIFY_VIDS_JSON")
+        && let Ok(mapping) = serde_json::from_str::<HashMap<String, String>>(&mapping_json)
+    {
+        config.trust.sender_verify_vid_paths = mapping;
+    }
+
+    if let Ok(channels_csv) = std::env::var("MOFACLAW_TRUST_STRICT_INBOUND_CHANNELS") {
+        config.trust.strict_inbound_channels = parse_csv_list(&channels_csv);
+    }
+
     // Additional env vars can be added here
+}
+
+fn parse_bool_env(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect()
 }
 
 /// Save configuration to file
@@ -566,7 +737,13 @@ mod tests {
         let config = default_config();
         assert_eq!(config.agents.defaults.model, "anthropic/claude-opus-4-5");
         assert_eq!(config.agents.defaults.max_tokens, 8192);
+        assert!(config.agents.default_skill.is_empty());
+        assert!(config.agents.subagents.is_empty());
         assert_eq!(config.gateway.port, 18790);
+        assert!(!config.trust.enabled);
+        assert!(config.trust.allow_unsigned_inbound);
+        assert!(config.trust.sender_verify_vid_paths.is_empty());
+        assert_eq!(config.trust.strict_inbound_channels, vec!["system"]);
     }
 
     #[test]
