@@ -299,7 +299,13 @@ impl AgentLoop {
             Some(msg.media.clone())
         };
         let final_content = self
-            .run_agent_loop(context_messages, &msg.content, media)
+            .run_agent_loop(
+                context_messages,
+                &msg.content,
+                media,
+                &response_channel,
+                &response_chat_id,
+            )
             .await?;
 
         // Save to session
@@ -347,9 +353,14 @@ impl AgentLoop {
         context: Vec<ChatMessage>,
         content: &str,
         media: Option<Vec<String>>,
+        response_channel: &str,
+        response_chat_id: &str,
     ) -> Result<Option<String>> {
-        let tool_executor = Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
-            as Arc<dyn mofa_sdk::llm::ToolExecutor>;
+        let tool_executor = Arc::new(ToolRegistryExecutor::with_context(
+            self.tools.clone(),
+            response_channel,
+            response_chat_id,
+        )) as Arc<dyn mofa_sdk::llm::ToolExecutor>;
 
         let config = MofaAgentLoopConfig {
             max_tool_iterations: self.max_iterations,
