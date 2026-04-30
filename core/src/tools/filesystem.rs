@@ -45,7 +45,9 @@ impl SimpleTool for ReadFileTool {
     }
 
     fn description(&self) -> &str {
-        "Read the contents of a file at the given path."
+        "Read the contents of a file at the given path. \
+        Optionally provide start_line and end_line (1-indexed, inclusive) to read \
+        only a portion of large files."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -55,6 +57,16 @@ impl SimpleTool for ReadFileTool {
                 "path": {
                     "type": "string",
                     "description": "The file path to read"
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "First line to read (1-indexed, inclusive). Omit to start from the beginning.",
+                    "minimum": 1
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Last line to read (1-indexed, inclusive). Omit to read to the end of the file.",
+                    "minimum": 1
                 }
             },
             "required": ["path"]
@@ -91,16 +103,73 @@ impl SimpleTool for ReadFileTool {
             return ToolResult::failure(format!("Error: Not a file: {}", path.display()));
         }
 
-        match fs::read_to_string(&path).await {
-            Ok(content) => ToolResult::success_text(content),
-            Err(e) => ToolResult::failure(format!("Error reading file: {}", e).to_string()),
+        let content = match fs::read_to_string(&path).await {
+            Ok(c) => c,
+            Err(e) => return ToolResult::failure(format!("Error reading file: {}", e)),
+        };
+
+        // Extract optional line-range parameters.
+        let start_line = input
+            .get_number("start_line")
+            .map(|v| v as usize)
+            .unwrap_or(1);
+        let end_line = input.get_number("end_line").map(|v| v as usize);
+
+        // Validate start_line is at least 1.
+        if start_line < 1 {
+            return ToolResult::failure("start_line must be >= 1");
         }
+
+        // Collect lines (0-indexed internally).
+        let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len();
+
+        // Default end_line to last line.
+        let end_line = end_line.unwrap_or(total_lines);
+
+        // Validate range.
+        if start_line > total_lines {
+            return ToolResult::failure(format!(
+                "start_line ({}) exceeds total line count ({})",
+                start_line, total_lines
+            ));
+        }
+        if end_line < start_line {
+            return ToolResult::failure(format!(
+                "end_line ({}) must be >= start_line ({})",
+                end_line, start_line
+            ));
+        }
+
+        // Clamp end_line to actual file length.
+        let end_line = end_line.min(total_lines);
+
+        // Slice the requested lines (convert to 0-indexed).
+        let slice = &lines[(start_line - 1)..end_line];
+
+        // Prepend a context header when a sub-range was requested so the LLM
+        // knows where it is in the file and how many lines remain.
+        let output = if start_line == 1 && end_line == total_lines {
+            slice.join("\n")
+        } else {
+            format!(
+                "// File: {} (lines {}-{} of {})\n{}",
+                path.display(),
+                start_line,
+                end_line,
+                total_lines,
+                slice.join("\n")
+            )
+        };
+
+        ToolResult::success_text(output)
     }
 
     fn category(&self) -> ToolCategory {
         ToolCategory::File
     }
 }
+
 
 /// Tool to write content to a file
 pub struct WriteFileTool {
@@ -475,11 +544,102 @@ fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
 
     #[tokio::test]
     async fn test_expand_tilde() {
         let expanded = expand_tilde(Path::new("~/test"));
         // Should not start with ~ anymore
         assert!(!expanded.starts_with("~"));
+    }
+
+    /// Write `content` to a temp file and return the NamedTempFile (keeps it alive).
+    async fn write_temp(content: &str) -> NamedTempFile {
+        let mut f = NamedTempFile::new().expect("create temp file");
+        f.write_all(content.as_bytes()).expect("write temp file");
+        f
+    }
+
+    #[tokio::test]
+    async fn read_file_full_returns_all_content() {
+        let content = "line1\nline2\nline3\n";
+        let tmp = write_temp(content).await;
+        let tool = ReadFileTool::new();
+        let input = ToolInput::from_json(json!({"path": tmp.path().to_str().unwrap()}));
+        let result = tool.execute(input).await;
+        assert!(result.success, "expected success");
+        // Full read must NOT include the range header.
+        let text = result.as_text().unwrap();
+        assert!(!text.contains("(lines"), "no header expected for full read");
+        assert!(text.contains("line1"));
+        assert!(text.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn read_file_line_range_returns_slice() {
+        let content = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+        let tmp = write_temp(content).await;
+        let tool = ReadFileTool::new();
+        let input = ToolInput::from_json(json!({
+            "path": tmp.path().to_str().unwrap(),
+            "start_line": 2,
+            "end_line": 3
+        }));
+        let result = tool.execute(input).await;
+        assert!(result.success, "expected success: {:?}", result.error);
+        let text = result.as_text().unwrap();
+        // Header must be present for a sub-range read.
+        assert!(text.contains("lines 2-3 of 5"), "header missing: {}", text);
+        assert!(text.contains("beta"), "beta missing");
+        assert!(text.contains("gamma"), "gamma missing");
+        assert!(!text.contains("alpha"), "alpha should not appear");
+        assert!(!text.contains("delta"), "delta should not appear");
+    }
+
+    #[tokio::test]
+    async fn read_file_invalid_start_line_returns_error() {
+        let tmp = write_temp("a\nb\nc\n").await;
+        let tool = ReadFileTool::new();
+        // start_line=10 exceeds 3-line file.
+        let input = ToolInput::from_json(json!({
+            "path": tmp.path().to_str().unwrap(),
+            "start_line": 10
+        }));
+        let result = tool.execute(input).await;
+        assert!(!result.success, "should fail for out-of-range start_line");
+        assert!(result.error.unwrap().contains("exceeds total line count"));
+    }
+
+    #[tokio::test]
+    async fn read_file_end_line_before_start_returns_error() {
+        let tmp = write_temp("a\nb\nc\n").await;
+        let tool = ReadFileTool::new();
+        let input = ToolInput::from_json(json!({
+            "path": tmp.path().to_str().unwrap(),
+            "start_line": 3,
+            "end_line": 1
+        }));
+        let result = tool.execute(input).await;
+        assert!(!result.success, "should fail when end_line < start_line");
+        assert!(result.error.unwrap().contains("end_line"));
+    }
+
+    #[tokio::test]
+    async fn read_file_end_line_clamped_to_total() {
+        let content = "x\ny\nz\n";
+        let tmp = write_temp(content).await;
+        let tool = ReadFileTool::new();
+        // end_line=999 should be silently clamped to the last line.
+        let input = ToolInput::from_json(json!({
+            "path": tmp.path().to_str().unwrap(),
+            "start_line": 2,
+            "end_line": 999
+        }));
+        let result = tool.execute(input).await;
+        assert!(result.success, "should succeed with clamped end_line");
+        let text = result.as_text().unwrap();
+        assert!(text.contains("y"));
+        assert!(text.contains("z"));
     }
 }
