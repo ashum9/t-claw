@@ -449,38 +449,25 @@ impl Config {
         expand_tilde(&self.agents.defaults.workspace)
     }
 
-    /// Get API key in priority order
+    /// Get API key in priority order.
+    ///
+    /// Priority: OpenRouter > Anthropic > OpenAI > Gemini > Zhipu > Groq > vLLM
+    ///
+    /// OpenRouter is checked first so that a single gateway key can proxy any
+    /// underlying provider without requiring individual provider credentials.
     pub fn get_api_key(&self) -> Option<String> {
-        self.providers
-            .openrouter
-            .api_key
-            .is_empty()
-            .then(|| self.providers.anthropic.api_key.clone())
-            .filter(|k| !k.is_empty())
-            .or_else(|| {
-                (!self.providers.openai.api_key.is_empty())
-                    .then(|| self.providers.openai.api_key.clone())
-            })
-            .or_else(|| {
-                (!self.providers.gemini.api_key.is_empty())
-                    .then(|| self.providers.gemini.api_key.clone())
-            })
-            .or_else(|| {
-                (!self.providers.zhipu.api_key.is_empty())
-                    .then(|| self.providers.zhipu.api_key.clone())
-            })
-            .or_else(|| {
-                (!self.providers.groq.api_key.is_empty())
-                    .then(|| self.providers.groq.api_key.clone())
-            })
-            .or_else(|| {
-                (!self.providers.vllm.api_key.is_empty())
-                    .then(|| self.providers.vllm.api_key.clone())
-            })
-            .or_else(|| {
-                (!self.providers.openrouter.api_key.is_empty())
-                    .then(|| self.providers.openrouter.api_key.clone())
-            })
+        // Helper closure that returns Some(key) when the key is non-empty.
+        let non_empty = |k: &str| -> Option<String> {
+            if k.is_empty() { None } else { Some(k.to_string()) }
+        };
+
+        non_empty(&self.providers.openrouter.api_key)
+            .or_else(|| non_empty(&self.providers.anthropic.api_key))
+            .or_else(|| non_empty(&self.providers.openai.api_key))
+            .or_else(|| non_empty(&self.providers.gemini.api_key))
+            .or_else(|| non_empty(&self.providers.zhipu.api_key))
+            .or_else(|| non_empty(&self.providers.groq.api_key))
+            .or_else(|| non_empty(&self.providers.vllm.api_key))
     }
 
     /// Get API base URL if using custom endpoint
@@ -584,18 +571,81 @@ pub async fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-/// Apply environment variable overrides to config
+/// Apply environment variable overrides to config.
+///
+/// Supported formats:
+/// - `MOFACLAW_PROVIDERS_<PROVIDER>_API_KEY` — primary form for any provider key
+/// - `MOFACLAW_PROVIDERS_<PROVIDER>_API_BASE` — override the API base URL
+/// - Well-known short aliases (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) for
+///   drop-in compatibility with widely used tooling.
+///
+/// Provider names: `OPENROUTER`, `ANTHROPIC`, `OPENAI`, `GEMINI`, `ZHIPU`, `GROQ`, `VLLM`.
 fn apply_env_overrides(config: &mut Config) {
-    // Environment variables override config values
-    // Format: MOFACLAW__SECTION__KEY=value
-    // For example: MOFACLAW__PROVIDERS__OPENROUTER__API_KEY=sk-...
+    // --- Provider API keys (primary form) ---
+    apply_provider_key(
+        &mut config.providers.openrouter.api_key,
+        &["MOFACLAW_PROVIDERS_OPENROUTER_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.openrouter.api_base,
+        &["MOFACLAW_PROVIDERS_OPENROUTER_API_BASE"],
+    );
 
-    if let Ok(_key) = std::env::var("MOFACLAW_PROVIDERS_OPENROUTER_API_KEY") {
-        // We can't modify the config in place easily, so this is handled at load time
-        // For now, just log it (in real implementation, we'd handle this)
-        tracing::debug!("OpenRouter API key from environment");
-    }
+    apply_provider_key(
+        &mut config.providers.anthropic.api_key,
+        &["MOFACLAW_PROVIDERS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.anthropic.api_base,
+        &["MOFACLAW_PROVIDERS_ANTHROPIC_API_BASE"],
+    );
 
+    apply_provider_key(
+        &mut config.providers.openai.api_key,
+        &["MOFACLAW_PROVIDERS_OPENAI_API_KEY", "OPENAI_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.openai.api_base,
+        &["MOFACLAW_PROVIDERS_OPENAI_API_BASE", "OPENAI_API_BASE"],
+    );
+
+    apply_provider_key(
+        &mut config.providers.gemini.api_key,
+        &["MOFACLAW_PROVIDERS_GEMINI_API_KEY", "GEMINI_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.gemini.api_base,
+        &["MOFACLAW_PROVIDERS_GEMINI_API_BASE"],
+    );
+
+    apply_provider_key(
+        &mut config.providers.zhipu.api_key,
+        &["MOFACLAW_PROVIDERS_ZHIPU_API_KEY", "ZHIPU_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.zhipu.api_base,
+        &["MOFACLAW_PROVIDERS_ZHIPU_API_BASE"],
+    );
+
+    apply_provider_key(
+        &mut config.providers.groq.api_key,
+        &["MOFACLAW_PROVIDERS_GROQ_API_KEY", "GROQ_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.groq.api_base,
+        &["MOFACLAW_PROVIDERS_GROQ_API_BASE"],
+    );
+
+    apply_provider_key(
+        &mut config.providers.vllm.api_key,
+        &["MOFACLAW_PROVIDERS_VLLM_API_KEY"],
+    );
+    apply_provider_base(
+        &mut config.providers.vllm.api_base,
+        &["MOFACLAW_PROVIDERS_VLLM_API_BASE"],
+    );
+
+    // --- Agent defaults ---
     if let Ok(value) = std::env::var("MOFACLAW_AGENTS_DEFAULT_SKILL")
         && !value.trim().is_empty()
     {
@@ -608,6 +658,7 @@ fn apply_env_overrides(config: &mut Config) {
         config.agents.subagents = subagents;
     }
 
+    // --- Telegram channel ---
     let mut telegram_token_from_env = false;
 
     if let Ok(token) = std::env::var("MOFACLAW_CHANNELS_TELEGRAM_TOKEN")
@@ -644,6 +695,8 @@ fn apply_env_overrides(config: &mut Config) {
         config.channels.telegram.allow_from = parse_csv_list(&allow_from_csv);
     }
 
+    // Auto-enable Telegram when a token is injected via env and no explicit
+    // enabled flag is set.
     if telegram_token_from_env
         && std::env::var("MOFACLAW_CHANNELS_TELEGRAM_ENABLED").is_err()
         && std::env::var("TELEGRAM_ENABLED").is_err()
@@ -651,6 +704,7 @@ fn apply_env_overrides(config: &mut Config) {
         config.channels.telegram.enabled = true;
     }
 
+    // --- Trust layer ---
     if let Ok(value) = std::env::var("MOFACLAW_TRUST_ENABLED")
         && let Some(enabled) = parse_bool_env(&value)
     {
@@ -684,8 +738,34 @@ fn apply_env_overrides(config: &mut Config) {
     if let Ok(channels_csv) = std::env::var("MOFACLAW_TRUST_STRICT_INBOUND_CHANNELS") {
         config.trust.strict_inbound_channels = parse_csv_list(&channels_csv);
     }
+}
 
-    // Additional env vars can be added here
+/// Set `dest` to the first non-empty value found among the given env-var names.
+fn apply_provider_key(dest: &mut String, env_vars: &[&str]) {
+    for var in env_vars {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                tracing::debug!("Provider API key loaded from env var {}", var);
+                *dest = value;
+                return;
+            }
+        }
+    }
+}
+
+/// Set `dest` to the first non-empty value found among the given env-var names.
+fn apply_provider_base(dest: &mut Option<String>, env_vars: &[&str]) {
+    for var in env_vars {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                tracing::debug!("Provider API base loaded from env var {}", var);
+                *dest = Some(value);
+                return;
+            }
+        }
+    }
 }
 
 fn parse_bool_env(value: &str) -> Option<bool> {
@@ -759,5 +839,64 @@ mod tests {
         let config_dir = get_config_dir();
         let config_path = get_config_path();
         assert!(config_path.starts_with(&config_dir));
+    }
+
+    #[test]
+    fn test_get_api_key_prefers_openrouter() {
+        let mut config = Config::default();
+        config.providers.openrouter.api_key = "or-key".to_string();
+        config.providers.anthropic.api_key = "ant-key".to_string();
+        // OpenRouter must win, even though Anthropic is also set.
+        assert_eq!(config.get_api_key(), Some("or-key".to_string()));
+    }
+
+    #[test]
+    fn test_get_api_key_falls_back_to_anthropic() {
+        let mut config = Config::default();
+        config.providers.anthropic.api_key = "ant-key".to_string();
+        assert_eq!(config.get_api_key(), Some("ant-key".to_string()));
+    }
+
+    #[test]
+    fn test_get_api_key_returns_none_when_all_empty() {
+        let config = Config::default();
+        assert_eq!(config.get_api_key(), None);
+    }
+
+    #[test]
+    fn test_get_api_key_groq_fallback() {
+        let mut config = Config::default();
+        config.providers.groq.api_key = "groq-key".to_string();
+        assert_eq!(config.get_api_key(), Some("groq-key".to_string()));
+    }
+
+    #[test]
+    fn test_apply_provider_key_priority() {
+        std::env::set_var("TEST_VAR_1", "value1");
+        std::env::set_var("TEST_VAR_2", "value2");
+        let mut key = String::new();
+        apply_provider_key(&mut key, &["TEST_VAR_1", "TEST_VAR_2"]);
+        assert_eq!(key, "value1");
+        std::env::remove_var("TEST_VAR_1");
+        std::env::remove_var("TEST_VAR_2");
+    }
+
+    #[test]
+    fn test_apply_provider_key_falls_back_to_second() {
+        let mut key = String::new();
+        // Only the second variable is set; helper must fall through to it.
+        std::env::set_var("_MOFACLAW_TEST_KEY_B", "fallback-key");
+        apply_provider_key(&mut key, &["_MOFACLAW_TEST_KEY_A", "_MOFACLAW_TEST_KEY_B"]);
+        assert_eq!(key, "fallback-key");
+        std::env::remove_var("_MOFACLAW_TEST_KEY_B");
+    }
+
+    #[test]
+    fn test_apply_provider_base_sets_option() {
+        let mut base: Option<String> = None;
+        std::env::set_var("_MOFACLAW_TEST_BASE_URL", "https://api.example.com/v1");
+        apply_provider_base(&mut base, &["_MOFACLAW_TEST_BASE_URL"]);
+        assert_eq!(base, Some("https://api.example.com/v1".to_string()));
+        std::env::remove_var("_MOFACLAW_TEST_BASE_URL");
     }
 }
