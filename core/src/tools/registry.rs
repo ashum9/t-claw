@@ -7,7 +7,7 @@ use crate::error::{Result, ToolError};
 use mofa_sdk::agent::{SimpleTool, SimpleToolRegistry, ToolRegistry as MofaToolRegistry, as_tool};
 use mofa_sdk::kernel::{AgentContext, Tool, ToolInput};
 use mofa_sdk::llm::Tool as MofaTool;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -159,11 +159,29 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistry {
 /// Wrapper for Arc<RwLock<ToolRegistry>> that implements unified ToolExecutor
 pub struct ToolRegistryExecutor {
     inner: Arc<RwLock<ToolRegistry>>,
+    default_channel: Option<String>,
+    default_chat_id: Option<String>,
 }
 
 impl ToolRegistryExecutor {
     pub fn new(inner: Arc<RwLock<ToolRegistry>>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            default_channel: None,
+            default_chat_id: None,
+        }
+    }
+
+    pub fn with_context(
+        inner: Arc<RwLock<ToolRegistry>>,
+        channel: impl Into<String>,
+        chat_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            inner,
+            default_channel: Some(channel.into()),
+            default_chat_id: Some(chat_id.into()),
+        }
     }
 }
 
@@ -177,10 +195,23 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistryExecutor {
         let value: Value =
             serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::json!({}));
 
-        let params: HashMap<String, Value> = value
+        let mut params: HashMap<String, Value> = value
             .as_object()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
+
+        if name == "message" || name == "spawn" {
+            if let Some(channel) = self.default_channel.as_ref() {
+                params
+                    .entry("channel".to_string())
+                    .or_insert(json!(channel));
+            }
+            if let Some(chat_id) = self.default_chat_id.as_ref() {
+                params
+                    .entry("chat_id".to_string())
+                    .or_insert(json!(chat_id));
+            }
+        }
 
         registry
             .execute(name, &params)
